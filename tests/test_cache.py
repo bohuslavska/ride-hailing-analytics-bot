@@ -123,15 +123,18 @@ def test_chat_cache_requires_exact_question_only() -> None:
     )
 
     assert get_cached_chat("What is surge?")["answer"] == "Surge tracks shortage."
-    # Different casing / wording is not a hit.
-    assert get_cached_chat("what is surge?") is None
-    # History is not part of the key: identical wording still hits.
+    # Case differences still hit.
+    assert get_cached_chat("what is surge?")["answer"] == "Surge tracks shortage."
+    # Wording / whitespace differences miss.
+    assert get_cached_chat("What is surge?") is not None
+    assert get_cached_chat("What is  surge?") is None
 
 
-def test_chat_cache_key_is_exact_question_hash() -> None:
-    assert chat_cache_key("Q") == chat_cache_key("Q")
+def test_chat_cache_key_is_case_insensitive() -> None:
+    assert chat_cache_key("Q") == chat_cache_key("q")
+    assert chat_cache_key("Скільки?") == chat_cache_key("скільки?")
     assert chat_cache_key("Q") != chat_cache_key("Q ")
-    assert chat_cache_key("Q") != chat_cache_key("q")
+    assert chat_cache_key("ab") != chat_cache_key("ba")
 
 
 def test_redis_status_reports_three_states(monkeypatch: pytest.MonkeyPatch) -> None:

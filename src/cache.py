@@ -4,9 +4,8 @@ Optional Redis cache for deterministic analytics and exact-match chat reuse.
 Analytics: the dataset does not change while the process is up, so the same
 funnel / clustering / conversion call always produces the same payload.
 
-Chat: a previous answer is reused only when the question string matches
-exactly (byte-for-byte after the API's strip). History is ignored for the
-cache key: the same wording reuses the stored answer even mid-conversation.
+Chat: a previous answer is reused when the question matches after strip +
+casefold (case-insensitive exact wording). History is ignored for the key.
 
 Redis is optional by design. When REDIS_URL is unset, or the server is down,
 every call falls through. The assistant must keep answering when the cache is
@@ -33,7 +32,7 @@ T = TypeVar("T")
 
 # Bump when a cached payload shape changes incompatibly.
 _KEY_PREFIX = "rha:v1:"
-_CHAT_PREFIX = "rha:chat:v2:"
+_CHAT_PREFIX = "rha:chat:v3:"
 _LOG_PREVIEW_CHARS = 280
 # Upstash over the Fly private network is usually fast, but the first connect
 # after a deploy can exceed a sub-second budget; keep retries cheap either way.
@@ -190,10 +189,11 @@ def chat_cache_key(question: str) -> str:
     """
     Exact-match key for a chat question.
 
-    Hashed as sent (no lowercasing or fuzzy normalisation). History is not
-    part of the key: identical wording reuses the same answer.
+    Case is ignored (`casefold`); wording and whitespace still must match.
+    History is not part of the key.
     """
-    digest = hashlib.sha256(question.encode("utf-8")).hexdigest()
+    normalised = question.casefold()
+    digest = hashlib.sha256(normalised.encode("utf-8")).hexdigest()
     return f"{_CHAT_PREFIX}{digest}"
 
 
