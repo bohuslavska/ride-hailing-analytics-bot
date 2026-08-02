@@ -66,8 +66,8 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.0
     agent_max_iterations: int = 8
 
-    # Optional Redis cache for deterministic analytics. When unset, every call
-    # goes straight to Postgres / sklearn; the assistant does not require Redis.
+    # Optional Redis: analytics results + exact-match chat reuse. When unset,
+    # every call goes straight to Postgres / the LLM; Redis is not required.
     redis_url: str | None = None
     redis_ttl_seconds: int = 3_600
 

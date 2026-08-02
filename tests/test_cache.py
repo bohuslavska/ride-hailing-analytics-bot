@@ -12,7 +12,16 @@ from typing import Any
 import pytest
 
 from src import cache as cache_module
-from src.cache import cache_key, configure_client, redis_status, remember, reset_client
+from src.cache import (
+    cache_key,
+    chat_cache_key,
+    configure_client,
+    get_cached_chat,
+    redis_status,
+    remember,
+    reset_client,
+    store_cached_chat,
+)
 from src.observability import CACHE_REQUESTS
 
 
@@ -104,6 +113,36 @@ def test_remember_falls_through_on_redis_errors() -> None:
     assert _delta("error") == error_before + 1
 
 
+def test_chat_cache_requires_exact_question_and_history() -> None:
+    fake = FakeRedis()
+    configure_client(fake)
+
+    store_cached_chat(
+        "What is surge?",
+        [],
+        {"answer": "Surge tracks shortage.", "artifacts": [], "tool_calls": []},
+    )
+
+    assert get_cached_chat("What is surge?", [])["answer"] == "Surge tracks shortage."
+    # Different casing / wording is not a hit.
+    assert get_cached_chat("what is surge?", []) is None
+    # Same question with history is a different key.
+    assert (
+        get_cached_chat(
+            "What is surge?",
+            [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}],
+        )
+        is None
+    )
+
+
+def test_chat_cache_key_is_stable_for_identical_payloads() -> None:
+    history = [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}]
+    assert chat_cache_key("Q", history) == chat_cache_key("Q", history)
+    assert chat_cache_key("Q", history) != chat_cache_key("Q", [])
+    assert chat_cache_key("Q", []) != chat_cache_key("Q ", [])
+
+
 def test_redis_status_reports_three_states(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cache_module.settings, "redis_url", None)
     reset_client()
@@ -114,6 +153,10 @@ def test_redis_status_reports_three_states(monkeypatch: pytest.MonkeyPatch) -> N
     assert redis_status() is True
 
     reset_client()
-    # With a URL but no reachable client, status is False rather than None.
-    cache_module._client_failed = True
+    # With a URL but a broken injected client, status is False rather than None.
+    class BrokenRedis(FakeRedis):
+        def ping(self) -> bool:
+            raise ConnectionError("down")
+
+    configure_client(BrokenRedis())
     assert redis_status() is False

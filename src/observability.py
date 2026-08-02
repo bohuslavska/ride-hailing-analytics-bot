@@ -51,7 +51,7 @@ HTTP_DURATION = Histogram(
 CHAT_REQUESTS = Counter(
     "chat_requests_total",
     "Completed assistant runs, by outcome.",
-    ["outcome"],  # answered | failed | unavailable (no API key configured)
+    ["outcome"],  # answered | cached | failed | unavailable
 )
 
 CHAT_DURATION = Histogram(

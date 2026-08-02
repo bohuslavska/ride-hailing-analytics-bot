@@ -10,6 +10,7 @@ which agent framework is underneath.
 from __future__ import annotations
 
 import json
+import logging
 import time
 from collections.abc import AsyncIterator
 from typing import Any
@@ -21,6 +22,7 @@ from langchain_openai import ChatOpenAI
 from src.bot.artifacts import ArtifactCollector
 from src.bot.prompts import build_system_prompt
 from src.bot.tools import build_tools
+from src.cache import get_cached_chat, log_chat_exchange, preview_for_log, store_cached_chat
 from src.config import settings
 from src.observability import (
     CHAT_DURATION,
@@ -28,6 +30,8 @@ from src.observability import (
     TOOL_CALLS,
     record_token_usage,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class LLMNotConfiguredError(RuntimeError):
@@ -118,14 +122,55 @@ async def stream_answer(
 
     Artifacts are drained after each tool completes rather than at the end, so
     a chart appears while the model is still composing its explanation of it.
+
+    Exact Redis reuse: if the same question and history were answered before,
+    the stored answer and artifacts are replayed without calling the model.
     """
-    collector = ArtifactCollector()
     started_at = time.perf_counter()
+    history = history or []
+    logger.info(
+        "chat request history_turns=%d question=%r",
+        len(history),
+        preview_for_log(question),
+    )
+
+    cached = get_cached_chat(question, history)
+    if cached is not None:
+        CHAT_REQUESTS.labels(outcome="cached").inc()
+        CHAT_DURATION.observe(time.perf_counter() - started_at)
+        log_chat_exchange(
+            question=question,
+            history=history,
+            answer=str(cached.get("answer") or ""),
+            source="cache",
+        )
+        yield {"type": "status", "message": "exact cache hit"}
+        for tool_call in cached.get("tool_calls") or []:
+            if isinstance(tool_call, dict):
+                yield {"type": "tool", **{k: v for k, v in tool_call.items() if k != "type"}}
+        for artifact in cached.get("artifacts") or []:
+            yield {"type": "artifact", "artifact": artifact}
+        answer = str(cached.get("answer") or "")
+        if answer:
+            yield {"type": "token", "text": answer}
+        yield {"type": "done", "answer": answer, "cached": True}
+        return
+
+    collector = ArtifactCollector()
+    tool_calls: list[dict[str, Any]] = []
+    artifacts_for_cache: list[dict[str, Any]] = []
 
     try:
         agent = build_agent(collector)
     except LLMNotConfiguredError as error:
         CHAT_REQUESTS.labels(outcome="unavailable").inc()
+        log_chat_exchange(
+            question=question,
+            history=history,
+            answer="",
+            source="unavailable",
+            error=str(error),
+        )
         yield {"type": "error", "message": str(error)}
         return
 
@@ -144,15 +189,18 @@ async def stream_answer(
             if kind == "on_tool_start":
                 tool_name = event.get("name", "tool")
                 TOOL_CALLS.labels(tool=tool_name).inc()
-                yield {
+                tool_event = {
                     "type": "tool",
                     **_describe_tool_call(
                         tool_name, event.get("data", {}).get("input")
                     ),
                 }
+                tool_calls.append(tool_event)
+                yield tool_event
 
             elif kind == "on_tool_end":
                 for artifact in collector.drain():
+                    artifacts_for_cache.append(artifact)
                     yield {"type": "artifact", "artifact": artifact}
                 yield {"type": "status", "message": "interpreting results"}
 
@@ -173,20 +221,48 @@ async def stream_answer(
     except Exception as error:  # noqa: BLE001 - reported to the user, not swallowed
         CHAT_REQUESTS.labels(outcome="failed").inc()
         CHAT_DURATION.observe(time.perf_counter() - started_at)
+        message = f"The assistant failed to complete this request: {error}"
+        log_chat_exchange(
+            question=question,
+            history=history,
+            answer="",
+            source="error",
+            error=message,
+        )
         yield {
             "type": "error",
-            "message": f"The assistant failed to complete this request: {error}",
+            "message": message,
         }
         return
 
     # Anything a tool produced after the final tool_end event.
     for artifact in collector.drain():
+        artifacts_for_cache.append(artifact)
         yield {"type": "artifact", "artifact": artifact}
+
+    answer = "".join(answer_parts).strip()
 
     CHAT_REQUESTS.labels(outcome="answered").inc()
     CHAT_DURATION.observe(time.perf_counter() - started_at)
+    log_chat_exchange(
+        question=question,
+        history=history,
+        answer=answer,
+        source="llm",
+    )
 
-    yield {"type": "done", "answer": "".join(answer_parts).strip()}
+    if answer:
+        store_cached_chat(
+            question,
+            history,
+            {
+                "answer": answer,
+                "artifacts": artifacts_for_cache,
+                "tool_calls": tool_calls,
+            },
+        )
+
+    yield {"type": "done", "answer": answer, "cached": False}
 
 
 def _chunk_text(chunk: Any) -> str:

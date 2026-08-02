@@ -1,15 +1,16 @@
 """
-Optional Redis cache for deterministic analytics.
+Optional Redis cache for deterministic analytics and exact-match chat reuse.
 
-The dataset does not change while the process is up, so the same funnel /
-clustering / conversion call always produces the same payload. Caching it
-avoids repeating expensive SQL and sklearn work every time the agent (or a
-dashboard) asks the same question.
+Analytics: the dataset does not change while the process is up, so the same
+funnel / clustering / conversion call always produces the same payload.
+
+Chat: a previous answer is reused only when the question string and history
+match exactly (byte-for-byte after the API's strip). Any follow-up with a
+different history is a miss and runs the agent again.
 
 Redis is optional by design. When REDIS_URL is unset, or the server is down,
-every call falls through to the underlying function. The assistant must keep
-answering when the cache is missing; the cache is an optimisation, not a
-dependency.
+every call falls through. The assistant must keep answering when the cache is
+missing; the cache is an optimisation, not a dependency.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import time
 from collections.abc import Callable
 from contextlib import suppress
 from typing import Any, TypeVar
@@ -31,26 +33,40 @@ T = TypeVar("T")
 
 # Bump when a cached payload shape changes incompatibly.
 _KEY_PREFIX = "rha:v1:"
+_CHAT_PREFIX = "rha:chat:v1:"
+_LOG_PREVIEW_CHARS = 280
+# Upstash over the Fly private network is usually fast, but the first connect
+# after a deploy can exceed a sub-second budget; keep retries cheap either way.
+_SOCKET_TIMEOUT_SECONDS = 3.0
+_RETRY_AFTER_SECONDS = 30.0
 
 _client: Any = None
-_client_failed = False
+_client_failed_at: float | None = None
+
+
+def preview_for_log(text: str, limit: int = _LOG_PREVIEW_CHARS) -> str:
+    """Short single-line snippet for request/response logs."""
+    cleaned = " ".join((text or "").split())
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[: limit - 1] + "…"
 
 
 def reset_client() -> None:
     """Drop the cached connection. Used by tests and after a failed ping."""
-    global _client, _client_failed
+    global _client, _client_failed_at
     if _client is not None:
         with suppress(Exception):
             _client.close()
     _client = None
-    _client_failed = False
+    _client_failed_at = None
 
 
 def configure_client(client: Any) -> None:
     """Inject a client (real or fake). Intended for tests."""
-    global _client, _client_failed
+    global _client, _client_failed_at
     _client = client
-    _client_failed = False
+    _client_failed_at = None
 
 
 def _get_client() -> Any | None:
@@ -62,12 +78,16 @@ def _get_client() -> Any | None:
     is briefly unreachable at startup. Both are worse than connecting on the
     first cache lookup.
     """
-    global _client, _client_failed
+    global _client, _client_failed_at
 
     if _client is not None:
         return _client
-    if _client_failed or not settings.redis_url:
+    if not settings.redis_url:
         return None
+    if _client_failed_at is not None:
+        if time.monotonic() - _client_failed_at < _RETRY_AFTER_SECONDS:
+            return None
+        _client_failed_at = None
 
     try:
         import redis  # imported lazily so the package is only needed when used
@@ -75,15 +95,15 @@ def _get_client() -> Any | None:
         candidate = redis.Redis.from_url(
             settings.redis_url,
             decode_responses=True,
-            socket_connect_timeout=0.5,
-            socket_timeout=0.5,
+            socket_connect_timeout=_SOCKET_TIMEOUT_SECONDS,
+            socket_timeout=_SOCKET_TIMEOUT_SECONDS,
         )
         candidate.ping()
         _client = candidate
         return _client
     except Exception as error:  # noqa: BLE001
-        _client_failed = True
-        logger.warning("Redis unavailable; analytics cache disabled: %s", error)
+        _client_failed_at = time.monotonic()
+        logger.warning("Redis unavailable; cache temporarily disabled: %s", error)
         return None
 
 
@@ -96,6 +116,10 @@ def redis_status() -> bool | None:
     """
     if not settings.redis_url:
         return None
+    # Health should always attempt a fresh probe rather than honouring the
+    # temporary failure cooldown used by request-path lookups.
+    global _client_failed_at
+    _client_failed_at = None
     client = _get_client()
     if client is None:
         return False
@@ -131,6 +155,7 @@ def remember(
     client = _get_client()
     if client is None:
         CACHE_REQUESTS.labels(outcome="bypass").inc()
+        logger.info("analytics cache bypass name=%s", name)
         return to_jsonable(compute())  # type: ignore[return-value]
 
     key = cache_key(name, params)
@@ -138,6 +163,7 @@ def remember(
         cached = client.get(key)
         if cached is not None:
             CACHE_REQUESTS.labels(outcome="hit").inc()
+            logger.info("analytics cache hit name=%s key=%s", name, key)
             return json.loads(cached)
     except Exception as error:  # noqa: BLE001
         CACHE_REQUESTS.labels(outcome="error").inc()
@@ -152,8 +178,131 @@ def remember(
             json.dumps(value, ensure_ascii=False, default=str),
         )
         CACHE_REQUESTS.labels(outcome="miss").inc()
+        logger.info("analytics cache miss name=%s key=%s stored=true", name, key)
     except Exception as error:  # noqa: BLE001
         CACHE_REQUESTS.labels(outcome="error").inc()
         logger.warning("Redis SET failed for %s: %s", name, error)
 
     return value  # type: ignore[return-value]
+
+
+def chat_cache_key(
+    question: str, history: list[dict[str, str]] | None = None
+) -> str:
+    """
+    Exact-match key for a chat turn.
+
+    The question and every history turn are hashed as sent (no lowercasing or
+    fuzzy normalisation). Reuse happens only when both match exactly.
+    """
+    payload = json.dumps(
+        {"question": question, "history": history or []},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return f"{_CHAT_PREFIX}{digest}"
+
+
+def get_cached_chat(
+    question: str, history: list[dict[str, str]] | None = None
+) -> dict[str, Any] | None:
+    """Return a previously stored chat payload, or None on miss / bypass / error."""
+    client = _get_client()
+    if client is None:
+        CACHE_REQUESTS.labels(outcome="bypass").inc()
+        return None
+
+    key = chat_cache_key(question, history)
+    try:
+        cached = client.get(key)
+    except Exception as error:  # noqa: BLE001
+        CACHE_REQUESTS.labels(outcome="error").inc()
+        logger.warning("Redis chat GET failed: %s", error)
+        return None
+
+    if cached is None:
+        CACHE_REQUESTS.labels(outcome="miss").inc()
+        return None
+
+    try:
+        payload = json.loads(cached)
+    except json.JSONDecodeError:
+        CACHE_REQUESTS.labels(outcome="error").inc()
+        logger.warning("Redis chat payload was not valid JSON for key=%s", key)
+        return None
+
+    if not isinstance(payload, dict) or not payload.get("answer"):
+        CACHE_REQUESTS.labels(outcome="error").inc()
+        return None
+
+    CACHE_REQUESTS.labels(outcome="hit").inc()
+    logger.info(
+        "chat cache hit key=%s question=%r answer=%r",
+        key,
+        preview_for_log(question),
+        preview_for_log(str(payload.get("answer", ""))),
+    )
+    return payload
+
+
+def store_cached_chat(
+    question: str,
+    history: list[dict[str, str]] | None,
+    payload: dict[str, Any],
+    *,
+    ttl_seconds: int | None = None,
+) -> None:
+    """Store a successful chat answer for exact reuse later."""
+    client = _get_client()
+    if client is None:
+        return
+
+    answer = (payload.get("answer") or "").strip()
+    if not answer:
+        return
+
+    key = chat_cache_key(question, history)
+    body = to_jsonable(
+        {
+            "answer": answer,
+            "artifacts": payload.get("artifacts") or [],
+            "tool_calls": payload.get("tool_calls") or [],
+        }
+    )
+    try:
+        client.setex(
+            key,
+            ttl_seconds if ttl_seconds is not None else settings.redis_ttl_seconds,
+            json.dumps(body, ensure_ascii=False, default=str),
+        )
+        logger.info(
+            "chat cache store key=%s question=%r answer=%r artifacts=%d",
+            key,
+            preview_for_log(question),
+            preview_for_log(answer),
+            len(body.get("artifacts") or []),
+        )
+    except Exception as error:  # noqa: BLE001
+        CACHE_REQUESTS.labels(outcome="error").inc()
+        logger.warning("Redis chat SET failed: %s", error)
+
+
+def log_chat_exchange(
+    *,
+    question: str,
+    history: list[dict[str, str]] | None,
+    answer: str,
+    source: str,
+    error: str | None = None,
+) -> None:
+    """Structured request/response log line for every completed chat turn."""
+    logger.info(
+        "chat exchange source=%s history_turns=%d question=%r answer=%r error=%r",
+        source,
+        len(history or []),
+        preview_for_log(question),
+        preview_for_log(answer) if answer else "",
+        preview_for_log(error) if error else None,
+    )
