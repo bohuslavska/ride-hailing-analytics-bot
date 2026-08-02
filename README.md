@@ -303,7 +303,7 @@ rush hour; на Хрещатику обідній попит просто три
 
 ## Як влаштований асистент
 
-<img width="971" height="966" alt="Screenshot 2026-08-02 at 04 06 36" src="https://github.com/user-attachments/assets/6ccd9890-0fd1-4438-8bfa-707c6d3acd7d" /><img width="978" height="605" alt="Screenshot 2026-08-02 at 20 55 49" src="https://github.com/user-attachments/assets/1be8089c-484f-45c8-9fb8-ddf50cf14cf8" />
+<img width="971" height="966" alt="Screenshot 2026-08-02 at 04 06 36" src="https://github.com/user-attachments/assets/6ccd9890-0fd1-4438-8bfa-707c6d3acd7d" />
 
 
 ```
