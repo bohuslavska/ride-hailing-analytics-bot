@@ -123,8 +123,8 @@ async def stream_answer(
     Artifacts are drained after each tool completes rather than at the end, so
     a chart appears while the model is still composing its explanation of it.
 
-    Exact Redis reuse: if the same question and history were answered before,
-    the stored answer and artifacts are replayed without calling the model.
+    Exact Redis reuse: if the same question wording was answered before, the
+    stored answer and artifacts are replayed without calling the model.
     """
     started_at = time.perf_counter()
     history = history or []
@@ -134,7 +134,7 @@ async def stream_answer(
         preview_for_log(question),
     )
 
-    cached = get_cached_chat(question, history)
+    cached = get_cached_chat(question)
     if cached is not None:
         CHAT_REQUESTS.labels(outcome="cached").inc()
         CHAT_DURATION.observe(time.perf_counter() - started_at)
@@ -254,7 +254,6 @@ async def stream_answer(
     if answer:
         store_cached_chat(
             question,
-            history,
             {
                 "answer": answer,
                 "artifacts": artifacts_for_cache,

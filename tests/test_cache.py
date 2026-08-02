@@ -113,34 +113,25 @@ def test_remember_falls_through_on_redis_errors() -> None:
     assert _delta("error") == error_before + 1
 
 
-def test_chat_cache_requires_exact_question_and_history() -> None:
+def test_chat_cache_requires_exact_question_only() -> None:
     fake = FakeRedis()
     configure_client(fake)
 
     store_cached_chat(
         "What is surge?",
-        [],
         {"answer": "Surge tracks shortage.", "artifacts": [], "tool_calls": []},
     )
 
-    assert get_cached_chat("What is surge?", [])["answer"] == "Surge tracks shortage."
+    assert get_cached_chat("What is surge?")["answer"] == "Surge tracks shortage."
     # Different casing / wording is not a hit.
-    assert get_cached_chat("what is surge?", []) is None
-    # Same question with history is a different key.
-    assert (
-        get_cached_chat(
-            "What is surge?",
-            [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}],
-        )
-        is None
-    )
+    assert get_cached_chat("what is surge?") is None
+    # History is not part of the key: identical wording still hits.
 
 
-def test_chat_cache_key_is_stable_for_identical_payloads() -> None:
-    history = [{"role": "user", "content": "a"}, {"role": "assistant", "content": "b"}]
-    assert chat_cache_key("Q", history) == chat_cache_key("Q", history)
-    assert chat_cache_key("Q", history) != chat_cache_key("Q", [])
-    assert chat_cache_key("Q", []) != chat_cache_key("Q ", [])
+def test_chat_cache_key_is_exact_question_hash() -> None:
+    assert chat_cache_key("Q") == chat_cache_key("Q")
+    assert chat_cache_key("Q") != chat_cache_key("Q ")
+    assert chat_cache_key("Q") != chat_cache_key("q")
 
 
 def test_redis_status_reports_three_states(monkeypatch: pytest.MonkeyPatch) -> None:

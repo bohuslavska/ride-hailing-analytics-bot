@@ -4,9 +4,9 @@ Optional Redis cache for deterministic analytics and exact-match chat reuse.
 Analytics: the dataset does not change while the process is up, so the same
 funnel / clustering / conversion call always produces the same payload.
 
-Chat: a previous answer is reused only when the question string and history
-match exactly (byte-for-byte after the API's strip). Any follow-up with a
-different history is a miss and runs the agent again.
+Chat: a previous answer is reused only when the question string matches
+exactly (byte-for-byte after the API's strip). History is ignored for the
+cache key: the same wording reuses the stored answer even mid-conversation.
 
 Redis is optional by design. When REDIS_URL is unset, or the server is down,
 every call falls through. The assistant must keep answering when the cache is
@@ -33,7 +33,7 @@ T = TypeVar("T")
 
 # Bump when a cached payload shape changes incompatibly.
 _KEY_PREFIX = "rha:v1:"
-_CHAT_PREFIX = "rha:chat:v1:"
+_CHAT_PREFIX = "rha:chat:v2:"
 _LOG_PREVIEW_CHARS = 280
 # Upstash over the Fly private network is usually fast, but the first connect
 # after a deploy can exceed a sub-second budget; keep retries cheap either way.
@@ -186,35 +186,25 @@ def remember(
     return value  # type: ignore[return-value]
 
 
-def chat_cache_key(
-    question: str, history: list[dict[str, str]] | None = None
-) -> str:
+def chat_cache_key(question: str) -> str:
     """
-    Exact-match key for a chat turn.
+    Exact-match key for a chat question.
 
-    The question and every history turn are hashed as sent (no lowercasing or
-    fuzzy normalisation). Reuse happens only when both match exactly.
+    Hashed as sent (no lowercasing or fuzzy normalisation). History is not
+    part of the key: identical wording reuses the same answer.
     """
-    payload = json.dumps(
-        {"question": question, "history": history or []},
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(question.encode("utf-8")).hexdigest()
     return f"{_CHAT_PREFIX}{digest}"
 
 
-def get_cached_chat(
-    question: str, history: list[dict[str, str]] | None = None
-) -> dict[str, Any] | None:
+def get_cached_chat(question: str) -> dict[str, Any] | None:
     """Return a previously stored chat payload, or None on miss / bypass / error."""
     client = _get_client()
     if client is None:
         CACHE_REQUESTS.labels(outcome="bypass").inc()
         return None
 
-    key = chat_cache_key(question, history)
+    key = chat_cache_key(question)
     try:
         cached = client.get(key)
     except Exception as error:  # noqa: BLE001
@@ -249,7 +239,6 @@ def get_cached_chat(
 
 def store_cached_chat(
     question: str,
-    history: list[dict[str, str]] | None,
     payload: dict[str, Any],
     *,
     ttl_seconds: int | None = None,
@@ -263,7 +252,7 @@ def store_cached_chat(
     if not answer:
         return
 
-    key = chat_cache_key(question, history)
+    key = chat_cache_key(question)
     body = to_jsonable(
         {
             "answer": answer,
