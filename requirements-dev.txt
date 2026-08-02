@@ -1,0 +1,10 @@
+-r requirements-data.txt
+
+pytest==9.1.1
+pytest-asyncio==1.3.0
+httpx==0.28.1
+ruff==0.15.5
+
+# For notebooks/exploratory_analysis.ipynb only.
+jupyterlab==4.4.10
+matplotlib==3.10.8

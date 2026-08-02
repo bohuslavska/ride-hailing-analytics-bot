@@ -1,0 +1,14 @@
+# Temporary one-shot loader app. Destroy after a successful load:
+#   fly apps destroy ride-hailing-loader -y
+app = 'ride-hailing-loader'
+primary_region = 'fra'
+
+[build]
+  dockerfile = 'Dockerfile.loader'
+
+# No http_service: this process loads data and exits.
+
+[[vm]]
+  memory = '2048'
+  cpu_kind = 'shared'
+  cpus = 1

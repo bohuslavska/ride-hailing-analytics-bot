@@ -1,0 +1,237 @@
+# Ride-hailing simulation parameters.
+#
+# Every number the simulator uses lives here so that the generated dataset is
+# reproducible and so that the behavioural assumptions are reviewable without
+# reading the generator code.
+
+seed: 42
+
+horizon:
+  start_date: "2026-01-05"   # a Monday, so weekday/weekend patterns line up
+  number_of_days: 60
+  frequency_minutes: 15
+
+volume:
+  # Multiplies both base demand and base supply, so it changes the size of the
+  # marketplace without changing how balanced it is.
+  #
+  # This matters more than it looks: surge and ETA are driven by
+  # demand_supply_ratio, and at ~2 requests per zone per 15 minutes that ratio
+  # is dominated by Poisson noise rather than by real shortage. Scaling up puts
+  # zone-interval counts in a range where the ratio reflects market structure.
+  scale: 3.0
+
+city:
+  # Synthetic city loosely shaped like Kyiv, used only to make distances and
+  # travel times plausible. No real geography is claimed.
+  center_latitude: 50.4501
+  center_longitude: 30.5234
+  km_per_degree_latitude: 111.0
+
+users:
+  number_of_users: 10000
+  # Probability that a ride is requested by a user whose home zone is the origin
+  # zone, as opposed to any active user in the city.
+  home_zone_share: 0.6
+  # Relative likelihood of being the requester during one's preferred time band
+  # versus any other band. Without this, a rider's preferred_hour_band would be
+  # an inert label: night owls would not actually travel at night, and rider
+  # segments would be unrecoverable from behaviour.
+  preferred_band_multiplier: 3.0
+  other_band_multiplier: 0.6
+
+demand:
+  weather_multiplier:
+    clear: 1.00
+    cloudy: 1.03
+    rain: 1.30
+    snow: 1.45
+  # Friday night behaves like a weekend night in nightlife zones even though
+  # Friday itself is a working day.
+  friday_night_entertainment_boost: 1.35
+
+supply:
+  # Fraction by which a zone's expected driver count grows per +1.0 of surge,
+  # applied with a lag so that drivers react to surge instead of causing it.
+  surge_response_gain: 0.9
+  surge_response_lag_intervals: 2
+  # Drivers relocate between zones but the city-wide pool per interval is fixed
+  # by the shift pattern, so a surging zone pulls drivers away from calm ones.
+  conserve_city_pool: true
+  weekend_multiplier: 0.90
+
+# Nationwide curfew. Civilian movement is prohibited overnight, so demand and
+# supply both collapse rather than merely dipping, and the hour before it starts
+# carries a rush of people getting home in time. These two effects together are
+# the single most distinctive feature of the daily profile, and any model of
+# this market that assumes a normal quiet-night pattern will be wrong.
+curfew:
+  enabled: true
+  start_hour: 0          # 00:00
+  end_hour: 5            # 05:00, exclusive
+  demand_multiplier: 0.04
+  supply_multiplier: 0.06
+  # The scramble home before movement is prohibited.
+  pre_curfew_rush_hours: 1.5
+  pre_curfew_rush_multiplier: 1.6
+
+# Air raid alerts. City-wide, unpredictable, and short relative to the
+# 60-day horizon. Demand spikes as the alert begins (people head home or change
+# plans), dips only mildly while it runs, and rebounds afterwards as deferred
+# trips are taken. Available driver supply is assumed to fall further than
+# demand -- a marketplace hypothesis (app pause, fewer accepted dispatches,
+# harder routing), not a claim that every driver is in a shelter. That imbalance
+# is why alerts show up as a surge event rather than a simple lull.
+air_raid_alerts:
+  enabled: true
+  alerts_per_week: 9.0
+  minimum_duration_intervals: 2    # 30 minutes
+  maximum_duration_intervals: 12   # 3 hours
+  onset_demand_multiplier: 1.8     # first interval only
+  # During the alert, surface transit stops and open metro sections close, so
+  # ride-hailing partly substitutes for public transport. Demand therefore falls
+  # only mildly; modelled available supply falls further (below).
+  during_demand_multiplier: 0.95
+  during_supply_multiplier: 0.50
+  recovery_intervals: 2
+  recovery_demand_multiplier: 1.3
+  eta_increment_minutes: 1.5
+
+weather:
+  # Markov chain over city-wide weather, so conditions persist for hours
+  # instead of flickering every 15 minutes.
+  states: ["clear", "cloudy", "rain", "snow"]
+  initial_distribution: [0.55, 0.30, 0.12, 0.03]
+  transition_matrix:
+    - [0.960, 0.035, 0.004, 0.001]
+    - [0.070, 0.880, 0.045, 0.005]
+    - [0.020, 0.140, 0.830, 0.010]
+    - [0.015, 0.075, 0.020, 0.890]
+
+special_events:
+  events_per_week: 2.5
+  minimum_duration_intervals: 8    # 2 hours
+  maximum_duration_intervals: 16   # 4 hours
+  demand_multiplier_minimum: 1.5
+  demand_multiplier_maximum: 2.5
+  # Only zone types where a concert / match / conference is plausible.
+  eligible_zone_types:
+    - entertainment
+    - city_center
+    - railway_station
+
+traffic:
+  # Rush-hour shape applied on top of each zone's structural congestion level.
+  morning_peak_hour: 8.5
+  evening_peak_hour: 18.0
+  peak_width_hours: 1.8
+  peak_amplitude: 0.55
+  weekend_multiplier: 0.65
+  weather_increment:
+    clear: 0.00
+    cloudy: 0.02
+    rain: 0.15
+    snow: 0.25
+
+surge:
+  # surge = 1 + deficit_coefficient * max(ratio - 1, 0) + event_bonus + noise
+  deficit_coefficient: 0.55
+  event_bonus: 0.15
+  noise_standard_deviation: 0.05
+  smoothing_weight: 0.30   # weight of the previous interval's surge
+  minimum: 1.0
+  maximum: 2.5
+
+eta:
+  # Passenger-facing pickup ETA after a car is found (not driver routing time).
+  # Empirically most city matches land under ~10 minutes; longer values are the
+  # shortage / suburb / alert tail, not the typical case.
+  # eta = zone base + deficit effect + traffic effect + weather effect + noise
+  deficit_coefficient: 2.8
+  traffic_coefficient: 2.8
+  bad_weather_increment: 1.2
+  noise_standard_deviation: 0.7
+  ride_level_noise_standard_deviation: 0.5
+  minimum_minutes: 2.0
+  maximum_minutes: 18.0
+  # Soft target used by validation: share of accepted rides with ETA <= this.
+  typical_maximum_minutes: 10.0
+
+# After the rider places an order the app searches for a car. If the search
+# runs longer than the rider's patience (typically 2-5 minutes — the window
+# where Uklon would also surface a price-slider prompt), they abandon to a
+# competitor. We do not model the slider itself; churn stands in for that exit.
+#
+# ratio_coefficient is kept moderate on purpose: extreme shortage must raise
+# churn, but not so hard that search timeouts drown the positive driver-side
+# surge effect that the Simpson / confounding analysis is built around.
+search:
+  patience_minutes_min: 2.0
+  patience_minutes_max: 5.0
+  base_match_minutes: 0.55
+  ratio_coefficient: 0.65
+  alert_extra_minutes: 0.8
+  noise_standard_deviation: 0.40
+  minimum_match_minutes: 0.25
+  maximum_match_minutes: 12.0
+
+pricing:
+  currency: "UAH"
+  fixed_fee: 50.0
+  price_per_km: 12.0
+  price_per_minute: 2.0
+  minimum_fare: 70.0
+
+speed:
+  # Average km/h used to turn distance into an estimated trip duration.
+  free_flow_kmh: 42.0
+  congested_kmh: 18.0
+
+conversion:
+  # p(placed | calculated) = sigmoid(...). These coefficients ARE the
+  # behavioural assumptions of the simulation, and tests assert that the
+  # generated data reproduces their sign.
+  #
+  # Note on price: final_price = base_price * surge, so a model with both a
+  # `surge` term and a raw `final_price` term would be collinear and neither
+  # coefficient would mean what it claims. Instead the two price channels are
+  # separated: `surge_coefficient` captures "this costs more than it normally
+  # would", and `log_price_coefficient` captures "this trip is expensive in
+  # absolute terms", which mostly tracks trip length.
+  place:
+    intercept: 1.15
+    eta_coefficient: -0.07
+    eta_sensitivity_gain: 0.50      # how much user eta_sensitivity amplifies ETA aversion
+    surge_coefficient: -0.90
+    price_sensitivity_gain: 0.60    # same, for surge aversion
+    log_price_coefficient: -0.45
+    reference_price: 150.0
+    peak_hour_coefficient: 0.35
+    bad_weather_coefficient: 0.25
+    # Catching a train is not a discretionary journey, so riders tolerate a
+    # worse quote for it.
+    rail_trip_coefficient: 0.30
+    # The few people still requesting a ride during curfew or an alert have a
+    # pressing reason to travel, so those who do ask are more likely to commit.
+    curfew_coefficient: 0.45
+    air_raid_alert_coefficient: 0.20
+  # p(accepted | placed) = sigmoid(...). Surge enters with a positive sign
+  # because a surging ride pays the driver more, which is the opposite of its
+  # effect on the rider. That sign flip is the most interesting single fact in
+  # the funnel and the tests pin it down.
+  accept:
+    intercept: 2.40
+    surge_coefficient: 0.80
+    eta_coefficient: -0.08
+    suburban_origin_coefficient: -0.50
+    attractive_destination_coefficient: 0.20
+    short_trip_coefficient: -0.25
+    short_trip_threshold_km: 2.0
+    air_raid_alert_coefficient: -0.60
+
+timing:
+  # Seconds between funnel stages, sampled from a lognormal.
+  place_delay_seconds_median: 25
+  place_delay_seconds_sigma: 0.6
+  accept_delay_seconds_median: 18
+  accept_delay_seconds_sigma: 0.7

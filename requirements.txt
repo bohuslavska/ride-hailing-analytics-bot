@@ -1,0 +1,34 @@
+# Runtime dependencies for serving the API, UI and agent.
+#
+# Deliberately excludes everything only needed to build the dataset; see
+# requirements-data.txt. The container queries Postgres and never opens a parquet
+# file, and pyarrow alone is 143 MB.
+
+fastapi==0.141.1
+uvicorn[standard]==0.52.0
+pydantic-settings==2.14.2
+python-dotenv==1.1.1
+
+numpy==2.2.6
+pandas==2.3.3
+scikit-learn==1.7.2
+scipy==1.15.3
+PyYAML==6.0.3
+
+SQLAlchemy==2.0.51
+psycopg[binary]==3.3.4
+
+# Optional at runtime (the app degrades if Redis is down), but a direct
+# dependency because src/cache.py imports it whenever REDIS_URL is set.
+redis==5.3.1
+
+# Metrics exposition on /metrics. A direct dependency, not a transitive one:
+# src/observability.py imports it.
+prometheus-client==0.26.0
+
+langchain==1.3.14
+langchain-openai==1.4.1
+langchain-core==1.5.2
+# Pinned explicitly, not left to langchain: stream_answer consumes LangGraph's
+# event feed directly, so the graph API is a direct dependency of ours.
+langgraph==1.2.10

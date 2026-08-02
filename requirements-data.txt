@@ -1,0 +1,6 @@
+-r requirements.txt
+
+# Needed to simulate the dataset, validate it and COPY it into Postgres, none of
+# which the deployed container does. Keeping it out of requirements.txt keeps
+# 143 MB of Arrow libraries out of the image.
+pyarrow==25.0.0

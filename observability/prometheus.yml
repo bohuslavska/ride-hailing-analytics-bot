@@ -1,0 +1,18 @@
+# Local scrape configuration.
+#
+# On Fly this file has no equivalent: the platform reads the [metrics] block in
+# fly.toml and scrapes the machine itself. This exists so the same dashboard can
+# be run from the repository alone.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: ride-hailing-api
+    metrics_path: /metrics
+    static_configs:
+      # host.docker.internal reaches `make serve` running on the host. When the
+      # API runs in the `full` compose profile instead, it is reachable as
+      # `api:8080` on the compose network.
+      - targets: ["host.docker.internal:8000", "api:8080"]

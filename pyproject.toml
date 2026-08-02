@@ -1,0 +1,30 @@
+[tool.pytest.ini_options]
+# Puts the project root on sys.path so `src` imports resolve without installing
+# the package or exporting PYTHONPATH.
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+asyncio_mode = "auto"
+filterwarnings = [
+    # Some BLAS builds emit spurious divide/overflow warnings from within
+    # scikit-learn's matmul. Suppressed narrowly rather than globally; see
+    # src/analytics/numerics.py.
+    "ignore:invalid value encountered:RuntimeWarning",
+    "ignore:divide by zero encountered:RuntimeWarning",
+    "ignore:overflow encountered:RuntimeWarning",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
+ignore = [
+    # Long lines inside explanatory comments and SQL strings read better than
+    # the wrapped alternative.
+    "E501",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]

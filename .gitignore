@@ -1,0 +1,14 @@
+.env
+.venv/
+venv/
+
+# Generated dataset. Reproducible from configs/ with a fixed seed, so there is
+# no reason to carry ~20 MB of parquet in the repository.
+data/
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.DS_Store

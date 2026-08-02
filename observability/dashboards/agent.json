@@ -1,0 +1,152 @@
+{
+  "uid": "ride-hailing-agent",
+  "title": "Ride-hailing analytics assistant",
+  "tags": ["ride-hailing", "llm"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "type": "piechart",
+      "title": "Which tools the agent reaches for",
+      "description": "A high run_sql share means the purpose-built analyses are being bypassed, which is where wrong answers come from.",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "options": { "legend": { "displayMode": "table", "placement": "right", "values": ["value"] } },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (tool) (increase(agent_tool_calls_total[$__range]))",
+          "legendFormat": "{{tool}}",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Token spend",
+      "description": "The real unit price of an answer, split by direction.",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "fillOpacity": 15 } },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (kind) (rate(agent_tokens_total[5m]) * 60)",
+          "legendFormat": "{{kind}} tokens/min"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Conversation outcomes",
+      "description": "answered / failed / unavailable. Anything but answered means the user saw an error frame.",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value_and_name"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (outcome) (increase(chat_requests_total[$__range]))",
+          "legendFormat": "{{outcome}}",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Answer latency (p50 / p95)",
+      "description": "End to end, including every tool call the agent made.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(chat_duration_seconds_bucket[5m])))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(chat_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Generated SQL, by outcome",
+      "description": "rejected means a guardrail stopped it before the database saw it; failed means Postgres refused it.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "fillOpacity": 15, "stacking": { "mode": "normal" } } },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (outcome) (rate(agent_sql_queries_total[5m]) * 60)",
+          "legendFormat": "{{outcome}}/min"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Generated SQL duration (p95)",
+      "description": "Approaching the 15 s statement timeout means queries are about to start failing.",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(agent_sql_query_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "HTTP latency by endpoint (p95)",
+      "description": "Route templates, so query strings do not fragment the series.",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, endpoint) (rate(http_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{endpoint}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Analytics cache (Redis)",
+      "description": "hit = served from Redis; miss = computed then stored; bypass = Redis not configured; error = Redis failed and the call fell through.",
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 23 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "fillOpacity": 15, "stacking": { "mode": "normal" } } },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (outcome) (rate(analytics_cache_requests_total[5m]) * 60)",
+          "legendFormat": "{{outcome}}/min"
+        }
+      ]
+    }
+  ]
+}

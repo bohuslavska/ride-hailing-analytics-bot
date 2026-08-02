@@ -1,0 +1,48 @@
+# fly.toml app configuration file generated for ride-hailing-analytics on 2026-08-01T01:29:29+03:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'ride-hailing-analytics'
+primary_region = 'fra'
+
+[build]
+[env]
+  AGENT_MAX_ITERATIONS = '8'
+  LLM_TEMPERATURE = '0.0'
+  OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1'
+  OPENROUTER_MODEL = 'anthropic/claude-sonnet-5'
+  REDIS_TTL_SECONDS = '3600'
+  SQL_MAX_RETURNED_ROWS = '500'
+  SQL_STATEMENT_TIMEOUT_MS = '15000'
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Keep both machines warm for the interview week: no scale-to-zero, always
+  # at least one healthy instance (prefer two for rolling restarts).
+  auto_stop_machines = 'off'
+  auto_start_machines = true
+  min_machines_running = 2
+
+  [http_service.concurrency]
+    type = 'requests'
+    hard_limit = 20
+    soft_limit = 12
+
+  [[http_service.checks]]
+    interval = '15s'
+    timeout = '15s'
+    grace_period = '60s'
+    method = 'GET'
+    path = '/api/health'
+
+[[vm]]
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1
+  memory_mb = 1024
+
+[[metrics]]
+  port = 8080
+  path = '/metrics'

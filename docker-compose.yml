@@ -1,0 +1,86 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: ride_hailing_postgres
+    environment:
+      POSTGRES_USER: ride_hailing
+      POSTGRES_PASSWORD: ride_hailing
+      POSTGRES_DB: ride_hailing
+    ports:
+      # 5432 and 5433 are commonly taken by other local projects.
+      - "5434:5432"
+    volumes:
+      - ride_hailing_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ride_hailing -d ride_hailing"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    container_name: ride_hailing_redis
+    ports:
+      # 6379/6380 are commonly taken by other local Redis instances.
+      - "6381:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: .
+    container_name: ride_hailing_api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://ride_hailing:ride_hailing@postgres:5432/ride_hailing
+      REDIS_URL: redis://redis:6379/0
+      REDIS_TTL_SECONDS: "3600"
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-anthropic/claude-sonnet-5}
+      PORT: "8080"
+    ports:
+      - "8081:8080"
+    profiles: ["full"]
+
+  # Local metrics stack. In production Fly scrapes /metrics itself and serves the
+  # result through its own Grafana, so this exists to make the same dashboard
+  # runnable by anyone with the repository and no Fly account.
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    container_name: ride_hailing_prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=7d"
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    profiles: ["observability"]
+
+  grafana:
+    image: grafana/grafana:11.5.1
+    container_name: ride_hailing_grafana
+    depends_on:
+      - prometheus
+    environment:
+      # Anonymous admin: this is a local demo stack with no data worth guarding,
+      # and a login prompt would only stand between a reviewer and the dashboard.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_USERS_DEFAULT_THEME: dark
+    volumes:
+      - ./observability/grafana:/etc/grafana/provisioning:ro
+      - ./observability/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    profiles: ["observability"]
+
+volumes:
+  ride_hailing_pgdata:
