@@ -69,7 +69,7 @@ class Settings(BaseSettings):
     # Optional Redis: analytics results + exact-match chat reuse. When unset,
     # every call goes straight to Postgres / the LLM; Redis is not required.
     redis_url: str | None = None
-    redis_ttl_seconds: int = 3_600
+    redis_ttl_seconds: int = 86_400
 
     @field_validator("database_url", "readonly_database_url")
     @classmethod
